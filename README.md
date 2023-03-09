@@ -20,6 +20,8 @@
         public IReadOnlyList<IFormFile> Pictures { get; init; }
     }
     ```
+    > 在 `class` 上添加的注解会自动应用到全部的 `property` ，在 `property` 上添加的注解会优先于 `class` 上的注解
+
 + 如果需要使用自定义注解或者内置注解，可以通过注册
   
     ```CSharp
