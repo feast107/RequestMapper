@@ -1,8 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+      <TargetFramework>netstandard2.0</TargetFramework>
       <LangVersion>preview</LangVersion>
+      <Version>0.1.0</Version>
+      <RepositoryUrl>https://github.com/feast107/RequestMapper.git</RepositoryUrl>
+      <PackageProjectUrl>https://github.com/feast107/RequestMapper</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>
