@@ -1,44 +1,53 @@
-﻿using Feast.RequestMapper.Attribute;
-using Feast.RequestMapper.Enum;
+﻿using Feast.RequestMapper.Enum;
 using Feast.RequestMapper.Extension;
+using Feast.RequestMapper.Interfaces;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Primitives;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
-
+using System.Text;
 
 namespace Feast.RequestMapper;
 #nullable enable
-
 public static class RequestMapper
 {
+    internal class NoSerializer : ISerializer { public object? Deserialize(string input, Type returnType) => null; }
+
+    public static Encoding Encoding { get; set; } = Encoding.UTF8;
+    
+    public static ISerializer Serializer { get; set; } = new NoSerializer();
+
     internal static readonly Dictionary<Type, Func<StringValues, object?>> Parser = new()
     {
         { typeof(string), v => v.ToString() },
-        { typeof(byte), v => { if (byte.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(char), v => { if (char.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(byte),   v => { if (byte.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(char),   v => { if (char.TryParse(v, out var val)) { return val; } return null; } },
         { typeof(ushort), v => { if (ushort.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(short), v => { if (short.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(uint), v => { if (uint.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(int), v => { if (int.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(ulong), v => { if(ulong.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(long), v => { if(long.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(float), v => { if(float.TryParse(v, out var val)) { return val; } return null; } },
-        { typeof(double),v=>{ if(double.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(short),  v => { if (short.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(uint),   v => { if (uint.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(int),    v => { if (int.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(ulong),  v => { if (ulong.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(long),   v => { if (long.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(float),  v => { if (float.TryParse(v, out var val)) { return val; } return null; } },
+        { typeof(double), v => { if (double.TryParse(v, out var val)) { return val; } return null; } },
         { typeof(StringValues), v => v },
         { typeof(List<string>), v => v.ToList() },
         { typeof(IList<string>), v => v.ToList() }
     };
 
-    internal static readonly Dictionary<Registry, HashSet<Type>> RegisteredAttributes = new()
+    private static readonly Dictionary<Registry, HashSet<Type>> RegisteredAttributes = new()
     {
-        { Registry.Form , new (){ typeof(FromFormAttribute) } },
-        { Registry.Body , new () },
-        { Registry.Query , new (){ typeof(FromQueryAttribute) } }
+        { Registry.Header, new() { typeof(FromHeaderAttribute) } },
+        { Registry.Form, new() { typeof(FromFormAttribute) } },
+        { Registry.Body, new() { typeof(FromBodyAttribute) } },
+        { Registry.Query, new() { typeof(FromQueryAttribute) } }
     };
+
     internal static bool HasSpecifiedAttribute(Registry key, MemberInfo info) => RegisteredAttributes[key].Any(x => info.GetCustomAttribute(x) != null);
 
     /// <summary>
@@ -66,7 +75,7 @@ public static class RequestMapper
     /// <param name="request">报文</param>
     /// <returns></returns>
     public static TModel Map<TModel>(this TModel instance, HttpRequest request) where TModel : class => RequestMapper<TModel>.Map(instance, request);
-    
+
     /// <summary>
     /// 创建并映射到目标对象
     /// </summary>
@@ -74,12 +83,9 @@ public static class RequestMapper
     /// <param name="request">报文</param>
     /// <param name="construct">是否调用构造</param>
     /// <returns></returns>
-    public static TModel Generate<TModel>(this HttpRequest request,bool construct = true) where TModel : class , new()
-    {
-        var ret = construct ? new() : (TModel)FormatterServices.GetUninitializedObject(typeof(TModel));
-        return ret.Map(request);
-    }
-
+    public static TModel Generate<TModel>(this HttpRequest request, bool construct = true)
+        where TModel : class, new() =>
+        construct ? new() : (TModel)FormatterServices.GetUninitializedObject(typeof(TModel)).Map(request);
 }
 
 internal static class RequestMapper<TModel> 
@@ -88,37 +94,55 @@ internal static class RequestMapper<TModel>
     {
         var modelType = typeof(TModel);
         var properties = modelType.GetProperties();
-        MappedActions = properties.Select(x =>
-        {
-            var mapper = GetMapperFromType(x);
-            mapper ??= GetMapperFromType(x, modelType);
-            return mapper;
-        }).SkipWhile(x => x == null);
+        MappedActions = properties
+            .Where(x=>x.CanWrite)
+            .Select(x => GetMapperFromType(x, modelType))
+            .Where(x => x != null);
     }
 
     private static readonly IEnumerable<Action<TModel,HttpRequest>?> MappedActions;
+
+    private static Func<StringValues, object?> TryGetParser(Type inputType)
+    {
+        if (!RequestMapper.Parser.TryGetValue(inputType, out var parser))
+        {
+            throw new ArgumentException(
+                $"Attribute " +
+                $"should be used on available property type in {nameof(RequestMapper.Parser)}");
+        }
+        return parser;
+    }
+
+    #region Header
+
+    private static Action<TModel, HttpRequest> GetHeaderMapper(PropertyInfo info)
+    {
+        var name = info.Name;
+        var another = info.Name.AnotherCamelCase();
+        var parser = TryGetParser(info.PropertyType);
+        return (model, request) =>
+        {
+            if (request.Headers.TryGetValue(name, out var str)
+                || request.Headers.TryGetValue(another, out str))
+                info.SetValue(model, parser(str));
+        };
+    }
+
+    #endregion
 
     #region Query
     private static Action<TModel, HttpRequest> GetQueryMapper(PropertyInfo info)
     {
         var baseName = info.Name;
         var adaptedName = info.Name.AnotherCamelCase();
-        if (!RequestMapper.Parser.TryGetValue(info.PropertyType, out var parser))
-        {
-            throw new ArgumentException(
-                $"Attribute " +
-                $"should be used on available property type in {nameof(RequestMapper.Parser)}");
-        }
+        var parser = TryGetParser(info.PropertyType);
         return (model, request) =>
         {
-            if (!request.Query.TryGetValue(baseName, out var value))
+            if (request.Query.TryGetValue(baseName, out var value)
+                || request.Query.TryGetValue(adaptedName, out value))
             {
-                if (!request.Query.TryGetValue(adaptedName, out value))
-                {
-                    return;
-                }
+                info.SetValue(model, parser(value));
             }
-            info.SetValue(model, parser(value));
         };
     }
     #endregion
@@ -128,12 +152,7 @@ internal static class RequestMapper<TModel>
     {
         var baseName = info.Name;
         var adaptedName = info.Name.AnotherCamelCase();
-        if (!RequestMapper.Parser.TryGetValue(info.PropertyType, out var parser))
-        {
-            throw new ArgumentException(
-                $"Attribute " +
-                $"should be used on available property type in {nameof(RequestMapper.Parser)}");
-        }
+        var parser = TryGetParser(info.PropertyType);
         return (model, request) =>
         {
             if (!request.Form.TryGetValue(baseName, out var value))
@@ -185,6 +204,32 @@ internal static class RequestMapper<TModel>
     }
     #endregion
 
+    #region Body
+
+    private static Action<TModel, HttpRequest> GetBodyMapper(PropertyInfo info)
+    {
+        string ReadStream(Stream stream)
+        {
+            if (!stream.CanRead) return string.Empty;
+            if (stream.Length > int.MaxValue)
+            {
+                throw new OverflowException("Body Stream length exceed");
+            }
+
+            var length = (int)stream.Length;
+            var bytes = new byte[length];
+            return stream.Read(bytes, 0, length) == length
+                ? RequestMapper.Encoding.GetString(bytes)
+                : string.Empty;
+        }
+
+        return RequestMapper.Parser.TryGetValue(info.PropertyType, out var parser)
+            ? (model, request) => info.SetValue(model, parser.Invoke(ReadStream(request.Body)))
+            : (model, request) => info.SetValue(model, RequestMapper.Serializer.Deserialize(ReadStream(request.Body), info.PropertyType));
+    }
+
+    #endregion
+
     /// <summary>
     /// 获取Mapper
     /// </summary>
@@ -194,22 +239,15 @@ internal static class RequestMapper<TModel>
     private static Action<TModel, HttpRequest>? GetMapperFromType(PropertyInfo info, MemberInfo? type = null)
     {
         type ??= info;
-        if (RequestMapper.HasSpecifiedAttribute(Registry.Form, type))
-        {
-            return GetFormMapper(info);
-        }
-
-        if (RequestMapper.HasSpecifiedAttribute(Registry.Query, type))
-        {
-            return GetQueryMapper(info);
-        }
-
-        return null;
+        return RequestMapper.HasSpecifiedAttribute(Registry.Header, type) ? GetHeaderMapper(info)
+            : RequestMapper.HasSpecifiedAttribute(Registry.Form, type) ? GetFormMapper(info)
+            : RequestMapper.HasSpecifiedAttribute(Registry.Query, type) ? GetQueryMapper(info)
+            : RequestMapper.HasSpecifiedAttribute(Registry.Body, info) ? GetBodyMapper(info)
+            : null;
     }
 
-    internal static TModel Map(TModel instance, HttpRequest request)
-    {
-        MappedActions.ForEach(action => action!(instance, request));
-        return instance;
-    }
+    internal static TModel Map(TModel instance, HttpRequest request) => 
+        MappedActions
+            .Aggregate(instance, (i, a) => 
+                { a?.Invoke(i, request); return i; });
 }
