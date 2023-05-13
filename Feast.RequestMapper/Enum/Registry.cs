@@ -1,11 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace Feast.RequestMapper.Enum
+﻿namespace Feast.RequestMapper.Enum
 {
     public enum Registry
     {
+        Header,
         Form,
         Query,
         Body,
