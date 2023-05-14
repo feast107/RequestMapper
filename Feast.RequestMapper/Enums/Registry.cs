@@ -1,4 +1,4 @@
-﻿namespace Feast.RequestMapper.Enum
+﻿namespace Feast.RequestMapper.Enums
 {
     public enum Registry
     {
