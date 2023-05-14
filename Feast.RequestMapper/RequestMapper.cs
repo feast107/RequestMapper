@@ -1,6 +1,4 @@
-﻿using Feast.RequestMapper.Enum;
-using Feast.RequestMapper.Extension;
-using Feast.RequestMapper.Interfaces;
+﻿using Feast.RequestMapper.Interfaces;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Primitives;
@@ -11,6 +9,8 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
 using System.Text;
+using Feast.RequestMapper.Enums;
+using Feast.RequestMapper.Extensions;
 
 namespace Feast.RequestMapper;
 #nullable enable
@@ -101,7 +101,6 @@ internal static class RequestMapper<TModel>
     }
 
     private static readonly IEnumerable<Action<TModel,HttpRequest>?> MappedActions;
-
     private static Func<StringValues, object?> TryGetParser(Type inputType)
     {
         if (!RequestMapper.Parser.TryGetValue(inputType, out var parser))
