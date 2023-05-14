@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Feast.RequestMapper.Extension
+namespace Feast.RequestMapper.Extensions
 {
     public static class StringExtension
     {
